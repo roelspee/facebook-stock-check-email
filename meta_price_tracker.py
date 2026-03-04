@@ -30,7 +30,7 @@ import pytz
 # ─────────────────────────────────────────────
 
 TICKER                 = "META"
-ALERT_BELOW            = 630.00
+ALERT_BELOW            = 680.00
 RUN_HOUR_CET = 8  # Run every day at 8am CET
 LOG_FILE               = "meta_price_log.csv"
 ALERT_COOLDOWN_SECONDS = 3600   # 1 hour between emails
