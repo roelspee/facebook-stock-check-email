@@ -30,8 +30,8 @@ import pytz
 # ─────────────────────────────────────────────
 
 TICKER                 = "META"
-ALERT_BELOW            = 680.00
-RUN_HOUR_CET = 8  # Run every day at 8am CET
+ALERT_BELOW            = 690.00
+RUN_HOUR_CET           = 8  # Run every day at 8am CET
 LOG_FILE               = "meta_price_log.csv"
 ALERT_COOLDOWN_SECONDS = 3600   # 1 hour between emails
 
@@ -95,7 +95,6 @@ def analyze_with_claude(price: float, target: float, articles: list) -> str:
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-        # Format news for the prompt
         if articles:
             news_text = "\n".join([
                 f"- [{a['source']}] {a['title']}: {a['description']}"
@@ -134,37 +133,111 @@ Be direct and practical. Do not give explicit buy/sell advice."""
         return "AI analysis unavailable at this time."
 
 
+def build_html_email(price: float, target: float, analysis: str, articles: list) -> tuple[str, str]:
+    """Build subject line and HTML body for the alert email."""
+    timestamp = datetime.now().strftime("%b %d, %Y · %H:%M")
+    drop_usd  = target - price
+    drop_pct  = (drop_usd / target) * 100
+
+    # Build news rows
+    news_rows = ""
+    for a in articles[:4]:
+        pub = a.get("publishedAt", "")[:10]  # just the date
+        news_rows += f"""
+        <tr>
+          <td style="padding:10px 0; border-bottom:1px solid #f0f0f0;">
+            <a href="{a['url']}" style="color:#1877f2; text-decoration:none; font-weight:600; font-size:14px;">{a['title']}</a>
+            <div style="color:#888; font-size:12px; margin-top:3px;">{a['source']} &nbsp;·&nbsp; {pub}</div>
+          </td>
+        </tr>"""
+
+    if not news_rows:
+        news_rows = "<tr><td style='padding:10px 0; color:#888; font-size:14px;'>No recent news found.</td></tr>"
+
+    # Paragraph-ify the analysis
+    analysis_html = "".join(
+        f"<p style='margin:0 0 10px 0;'>{p.strip()}</p>"
+        for p in analysis.split("\n") if p.strip()
+    )
+
+    subject = f"🔴 META ${price:.2f} — dropped ${drop_usd:.2f} below your alert"
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="margin:0; padding:0; background:#f4f5f7; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7; padding:32px 0;">
+    <tr>
+      <td align="center">
+        <table width="560" cellpadding="0" cellspacing="0" style="background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:#1877f2; padding:24px 32px;">
+              <div style="color:#fff; font-size:11px; font-weight:700; letter-spacing:1.2px; text-transform:uppercase; opacity:0.8;">Stock Alert</div>
+              <div style="color:#fff; font-size:26px; font-weight:700; margin-top:4px;">META Platforms</div>
+              <div style="color:rgba(255,255,255,0.75); font-size:13px; margin-top:2px;">{timestamp}</div>
+            </td>
+          </tr>
+
+          <!-- Price Block -->
+          <tr>
+            <td style="padding:28px 32px 0;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="background:#fff5f5; border:1px solid #ffd0d0; border-radius:8px; padding:16px 20px;">
+                    <div style="color:#c0392b; font-size:11px; font-weight:700; letter-spacing:1px; text-transform:uppercase;">Price dropped below target</div>
+                    <div style="margin-top:8px;">
+                      <span style="font-size:36px; font-weight:800; color:#1a1a1a;">${price:.2f}</span>
+                      <span style="color:#c0392b; font-size:15px; font-weight:600; margin-left:10px;">▼ ${drop_usd:.2f} ({drop_pct:.1f}%)</span>
+                    </div>
+                    <div style="color:#888; font-size:13px; margin-top:4px;">Your alert threshold: <strong>${target:.2f}</strong></div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- AI Analysis -->
+          <tr>
+            <td style="padding:24px 32px 0;">
+              <div style="font-size:11px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:#888; margin-bottom:10px;">AI Analysis</div>
+              <div style="font-size:14px; line-height:1.7; color:#333;">
+                {analysis_html}
+              </div>
+            </td>
+          </tr>
+
+          <!-- News -->
+          <tr>
+            <td style="padding:24px 32px 0;">
+              <div style="font-size:11px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:#888; margin-bottom:6px;">Recent News</div>
+              <table width="100%" cellpadding="0" cellspacing="0">
+                {news_rows}
+              </table>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:24px 32px 32px; color:#aaa; font-size:12px; border-top:1px solid #f0f0f0; margin-top:24px;">
+              Automated alert · Next email in {ALERT_COOLDOWN_SECONDS // 60} min if price stays below target
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+    return subject, html
+
+
 def send_smart_email(price: float, target: float, analysis: str, articles: list):
-    """Send a smart email with AI analysis and news."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    subject = f"🔴 META Alert: ${price:.2f} dropped below ${target:.2f} — AI Analysis Inside"
-
-    # Format news links
-    news_section = ""
-    if articles:
-        news_section = "\nRECENT NEWS:\n"
-        for a in articles[:5]:
-            news_section += f"  • [{a['source']}] {a['title']}\n    {a['url']}\n"
-
-    body = f"""
-META Stock Price Alert
-══════════════════════════════════════
-
-  Current Price : ${price:.2f}
-  Your Target   : below ${target:.2f}
-  Below by      : ${target - price:.2f} ({((target - price) / target * 100):.2f}%)
-  Time          : {timestamp}
-
-──────────────────────────────────────
-AI ANALYSIS
-──────────────────────────────────────
-
-{analysis}
-{news_section}
-──────────────────────────────────────
-This is an automated alert from your META Price Tracker Agent.
-Next alert in {ALERT_COOLDOWN_SECONDS // 60} minutes if price stays below target.
-"""
+    """Send a smart HTML email with AI analysis and news."""
+    subject, html_body = build_html_email(price, target, analysis, articles)
 
     try:
         response = requests.post(
@@ -177,7 +250,7 @@ Next alert in {ALERT_COOLDOWN_SECONDS // 60} minutes if price stays below target
                 "personalizations": [{"to": [{"email": EMAIL_RECEIVER}]}],
                 "from": {"email": EMAIL_SENDER},
                 "subject": subject,
-                "content": [{"type": "text/plain", "value": body}],
+                "content": [{"type": "text/html", "value": html_body}],
             },
             timeout=10
         )
@@ -243,7 +316,6 @@ def run():
         return int(delta), next_run.strftime("%Y-%m-%d %H:%M:%S %Z")
 
     while True:
-        # Wait until 8am CET
         secs, next_run_str = seconds_until_next_run()
         print(f"  ⏰ Next check at {next_run_str} (in {secs // 3600}h {(secs % 3600) // 60}m)")
         try:
@@ -252,7 +324,6 @@ def run():
             print(f"\nStopped. Goodbye!")
             break
 
-        # Run the check
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         price = get_price(TICKER)
 
