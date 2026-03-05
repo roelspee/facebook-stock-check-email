@@ -32,13 +32,16 @@ from typing import Optional
 # ─────────────────────────────────────────────
 
 WATCHLIST = [
-    {"ticker": "META",  "name": "Meta Platforms",    "alert_below": 634.58, "news_query": "META Facebook stock"},
-    {"ticker": "GOOGL", "name": "Alphabet (Google)",  "alert_below": 287.97, "news_query": "Alphabet Google stock"},
-    {"ticker": "MSFT",  "name": "Microsoft",          "alert_below": 384.94, "news_query": "Microsoft MSFT stock"},
-    {"ticker": "AAPL",  "name": "Apple",              "alert_below": 249.39, "news_query": "Apple AAPL stock"},
-    {"ticker": "NVDA",  "name": "Nvidia",             "alert_below": 173.89, "news_query": "Nvidia NVDA stock"},
-    {"ticker": "AMZN",  "name": "Amazon",             "alert_below": 205.98, "news_query": "Amazon AMZN stock"},
+    {"ticker": "META",  "name": "Meta Platforms",    "news_query": "META Facebook stock"},
+    {"ticker": "GOOGL", "name": "Alphabet (Google)",  "news_query": "Alphabet Google stock"},
+    {"ticker": "MSFT",  "name": "Microsoft",          "news_query": "Microsoft MSFT stock"},
+    {"ticker": "AAPL",  "name": "Apple",              "news_query": "Apple AAPL stock"},
+    {"ticker": "NVDA",  "name": "Nvidia",             "news_query": "Nvidia NVDA stock"},
+    {"ticker": "AMZN",  "name": "Amazon",             "news_query": "Amazon AMZN stock"},
 ]
+
+ALERT_DROP_PCT = 0.05   # Alert when price is 5% below 60-day high
+ROLLING_DAYS   = 60     # Lookback window for the high
 
 LOG_FILE = "stock_price_log.csv"   # Set to None to disable
 
@@ -52,15 +55,20 @@ NEWS_API_KEY      = os.environ.get("NEWS_API_KEY",      "")
 # ─────────────────────────────────────────────
 
 
-def get_price(ticker: str) -> Optional[float]:
-    """Fetch the latest stock price."""
+def get_price_and_threshold(ticker: str) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Fetch latest price, 60-day high, and dynamic alert threshold."""
     try:
         stock = yf.Ticker(ticker)
-        price = stock.fast_info.last_price
-        return round(price, 2)
+        price = round(stock.fast_info.last_price, 2)
+        hist = stock.history(period=f"{ROLLING_DAYS}d")
+        if hist.empty:
+            return price, None, None
+        high_60d = round(float(hist["High"].max()), 2)
+        threshold = round(high_60d * (1 - ALERT_DROP_PCT), 2)
+        return price, high_60d, threshold
     except Exception as e:
-        print(f"  [ERROR] Could not fetch price for {ticker}: {e}")
-        return None
+        print(f"  [ERROR] Could not fetch data for {ticker}: {e}")
+        return None, None, None
 
 
 def get_news(query: str, num_articles: int = 5) -> list:
@@ -178,7 +186,8 @@ def build_html_email(ticker: str, name: str, price: float, target: float, analys
 
     analysis_html = markdown_to_html(analysis)
 
-    subject = f"🔴 {ticker} ${price:.2f} — dropped ${drop_usd:.2f} below your alert"
+    high_60d = round(target / (1 - ALERT_DROP_PCT), 2)  # reverse-calculate for display
+    subject = f"🔴 {ticker} ${price:.2f} — 5% below 60-day high (${high_60d:.2f})"
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -209,7 +218,7 @@ def build_html_email(ticker: str, name: str, price: float, target: float, analys
                       <span style="font-size:36px; font-weight:800; color:#1a1a1a;">${price:.2f}</span>
                       <span style="color:#c0392b; font-size:15px; font-weight:600; margin-left:10px;">▼ ${drop_usd:.2f} ({drop_pct:.1f}%)</span>
                     </div>
-                    <div style="color:#888; font-size:13px; margin-top:4px;">Your alert threshold: <strong>${target:.2f}</strong></div>
+                    <div style="color:#888; font-size:13px; margin-top:4px;">Alert threshold: <strong>${target:.2f}</strong> &nbsp;·&nbsp; 60-day high: <strong>${high_60d:.2f}</strong></div>
                   </td>
                 </tr>
               </table>
@@ -281,17 +290,17 @@ def send_smart_email(ticker: str, name: str, price: float, target: float, analys
         return False
 
 
-def log_price(ticker: str, price: float, alert_below: float):
-    """Append price to CSV log file."""
+def log_price(ticker: str, price: float, high_60d: float, alert_below: float):
+    """Append price, 60d high, and threshold to CSV log file."""
     if not LOG_FILE:
         return
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     file_exists = os.path.isfile(LOG_FILE)
     with open(LOG_FILE, "a") as f:
         if not file_exists:
-            f.write("timestamp,ticker,price,alert_below,triggered\n")
+            f.write("timestamp,ticker,price,60d_high,alert_below,triggered\n")
         triggered = "YES" if price < alert_below else ""
-        f.write(f"{timestamp},{ticker},{price},{alert_below},{triggered}\n")
+        f.write(f"{timestamp},{ticker},{price},{high_60d},{alert_below},{triggered}\n")
 
 
 def main():
@@ -302,21 +311,24 @@ def main():
     triggered_count = 0
 
     for stock in WATCHLIST:
-        ticker      = stock["ticker"]
-        name        = stock["name"]
-        alert_below = stock["alert_below"]
-        news_query  = stock["news_query"]
+        ticker     = stock["ticker"]
+        name       = stock["name"]
+        news_query = stock["news_query"]
 
-        price = get_price(ticker)
+        price, high_60d, alert_below = get_price_and_threshold(ticker)
 
         if price is None:
             print(f"  {ticker}: ⚠️  Could not retrieve price, skipping.")
             continue
 
-        status = "🔴 BELOW TARGET" if price < alert_below else "✅ above target"
-        print(f"  {ticker}: ${price:.2f}  (alert: ${alert_below:.2f})  —  {status}")
+        if alert_below is None:
+            print(f"  {ticker}: ⚠️  Could not calculate 60d high, skipping.")
+            continue
 
-        log_price(ticker, price, alert_below)
+        status = "🔴 BELOW TARGET" if price < alert_below else "✅ above target"
+        print(f"  {ticker}: ${price:.2f}  (60d high: ${high_60d:.2f} → alert: ${alert_below:.2f})  —  {status}")
+
+        log_price(ticker, price, high_60d, alert_below)
 
         if price < alert_below:
             triggered_count += 1
