@@ -187,7 +187,7 @@ def build_html_email(ticker: str, name: str, price: float, target: float, analys
     analysis_html = markdown_to_html(analysis)
 
     high_60d = round(target / (1 - ALERT_DROP_PCT), 2)  # reverse-calculate for display
-    subject = f"🔴 {ticker} ${price:.2f} — 5% below 60-day high (${high_60d:.2f})"
+    subject = f"🔴 {ticker} ${price:.2f} — 5% below 7-day high (${high_60d:.2f})"
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -218,7 +218,7 @@ def build_html_email(ticker: str, name: str, price: float, target: float, analys
                       <span style="font-size:36px; font-weight:800; color:#1a1a1a;">${price:.2f}</span>
                       <span style="color:#c0392b; font-size:15px; font-weight:600; margin-left:10px;">▼ ${drop_usd:.2f} ({drop_pct:.1f}%)</span>
                     </div>
-                    <div style="color:#888; font-size:13px; margin-top:4px;">Alert threshold: <strong>${target:.2f}</strong> &nbsp;·&nbsp; 60-day high: <strong>${high_60d:.2f}</strong></div>
+                    <div style="color:#888; font-size:13px; margin-top:4px;">Alert threshold: <strong>${target:.2f}</strong> &nbsp;·&nbsp; 7-day high: <strong>${high_60d:.2f}</strong></div>
                   </td>
                 </tr>
               </table>
